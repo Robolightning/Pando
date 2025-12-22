@@ -1,0 +1,73 @@
+{
+  "name": "pando",
+  "displayName": "Pando",
+  "description": "Pando language support",
+  "version": "0.0.1",
+  "publisher": "Robolightning",
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [{
+      "id": "pd",
+      "aliases": ["Pando", "pd"],
+      "extensions": [".pd"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "pd",
+      "scopeName": "source.pando",
+      "path": "./syntaxes/pd.tmLanguage.json"
+    }],
+    "commands": [{
+    "command": "pando.run",
+    "title": "Запуск файла Pando",
+    "icon": "$(play)"
+  }],
+  "menus": {
+      "editor/context": [
+        {
+          "command": "pando.run",
+          "group": "navigation",
+          "when": "resourceLangId == pd"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "pando.run",
+          "group": "navigation",
+          "when": "resourceLangId == pd"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "pando.run",
+          "group": "navigation",
+          "when": "resourceLangId == pd && resourceFilename =~ /\\.pd$/"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "pando.run",
+          "group": "navigation",
+          "when": "resourceLangId == pd"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.107.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}

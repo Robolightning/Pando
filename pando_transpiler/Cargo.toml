@@ -1,0 +1,7 @@
+[package]
+name = "pando_transpiler"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Пока без внешних зависимостей
