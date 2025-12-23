@@ -3,22 +3,42 @@
   "name": "Pando",
   "patterns": [
     {
-      "include": "#keywords"
+      "include": "#comments"
     },
     {
       "include": "#strings"
+    },
+    {
+      "include": "#char_literals"
+    },
+    {
+      "include": "#literals"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#print_statements"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#identifiers"
     }
   ],
   "repository": {
-    "keywords": {
+    "comments": {
+      "name": "comment.line.number-sign.pando",
+      "begin": "#",
+      "end": "$",
       "patterns": [
         {
-          "name": "support.function.builtin.pando",
-          "match": "\\b(print)\\b"
-        },
-        {
-          "name": "keyword.control.pando",
-          "match": "\\b(if|while|for|return)\\b"
+          "name": "punctuation.definition.comment.pando",
+          "match": "#"
         }
       ]
     },
@@ -32,6 +52,133 @@
           "match": "\\\\."
         }
       ]
+    },
+    "char_literals": {
+      "name": "string.quoted.single.pando",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.pando",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.pando",
+          "match": "\\b\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.float.pando",
+          "match": "\\b\\d+\\.\\d+\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "begin": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(:)",
+      "end": "(?=#|$|\\n)",
+      "beginCaptures": {
+        "1": {
+          "name": "variable.other.readwrite.pando"
+        },
+        "2": {
+          "name": "punctuation.separator.pando"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#type_specifier"
+        },
+        {
+          "include": "#assignment"
+        }
+      ]
+    },
+    "type_specifier": {
+      "patterns": [
+        {
+          "name": "support.type.pando",
+          "match": "\\b(int(8|16|32|64|128|_size)?|uint(8|16|32|64|128|_size)|float|double|bool|char|str)\\b"
+        },
+        {
+          "name": "storage.type.pando",
+          "match": "\\bNone\\b"
+        },
+        {
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+          "name": ""
+        }
+      ]
+    },
+    "assignment": {
+      "begin": "=",
+      "end": "(?=#|$|\\n)",
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.operator.assignment.pando"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#literals"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#char_literals"
+        },
+        {
+          "include": "#constants"
+        },
+        {
+          "include": "#identifiers"
+        }
+      ]
+    },
+    "print_statements": {
+      "begin": "\\b(print)\\s*(\\()",
+      "end": "\\)",
+      "beginCaptures": {
+        "1": {
+          "name": "support.function.builtin.pando"
+        },
+        "2": {
+          "name": "punctuation.section.parens.begin.pando"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.parens.end.pando"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#strings"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.pando",
+          "match": "\\b(print)\\b"
+        },
+        {
+          "name": "keyword.control.pando",
+          "match": "\\b(if|while|for|return)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "name": "constant.language.pando",
+      "match": "\\b(True|False|None)\\b"
+    },
+    "identifiers": {
+      "name": "variable.other.readwrite.pando",
+      "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
     }
   },
   "scopeName": "source.pando"

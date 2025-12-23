@@ -15,7 +15,7 @@
   "contributes": {
     "languages": [{
       "id": "pd",
-      "aliases": ["Pando", "pd"],
+      "aliases": ["Pando","pd"],
       "extensions": [".pd"],
       "configuration": "./language-configuration.json"
     }],
@@ -25,39 +25,31 @@
       "path": "./syntaxes/pd.tmLanguage.json"
     }],
     "commands": [{
-    "command": "pando.run",
-    "title": "Запуск файла Pando",
-    "icon": "$(play)"
-  }],
-  "menus": {
-      "editor/context": [
-        {
-          "command": "pando.run",
-          "group": "navigation",
-          "when": "resourceLangId == pd"
-        }
-      ],
-      "explorer/context": [
-        {
-          "command": "pando.run",
-          "group": "navigation",
-          "when": "resourceLangId == pd"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "pando.run",
-          "group": "navigation",
-          "when": "resourceLangId == pd && resourceFilename =~ /\\.pd$/"
-        }
-      ],
-      "editor/title/context": [
-        {
-          "command": "pando.run",
-          "group": "navigation",
-          "when": "resourceLangId == pd"
-        }
-      ]
+      "command": "pando.run",
+      "title": "Запуск файла Pando",
+      "icon": "$(play)"
+    }],
+    "menus": {
+      "editor/context": [{
+        "command": "pando.run",
+        "group": "navigation",
+        "when": "resourceLangId == pd"
+      }],
+      "explorer/context": [{
+        "command": "pando.run",
+        "group": "navigation",
+        "when": "resourceLangId == pd"
+      }],
+      "editor/title": [{
+        "command": "pando.run",
+        "group": "navigation",
+        "when": "resourceLangId == pd && resourceFilename =~ /\\.pd$/"
+      }],
+      "editor/title/context": [{
+        "command": "pando.run",
+        "group": "navigation",
+        "when": "resourceLangId == pd"
+      }]
     }
   },
   "scripts": {
@@ -66,8 +58,13 @@
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
-    "@types/vscode": "^1.107.0",
     "@types/node": "^18.0.0",
+    "@types/vscode": "^1.107.0",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11"
   }
 }

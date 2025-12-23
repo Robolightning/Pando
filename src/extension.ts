@@ -2,11 +2,80 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn } from 'child_process';
+import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind } from 'vscode-languageclient/node';
+
+let client: LanguageClient;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Расширение Pando активировано!');
 
-    // Регистрируем команду "pando.run"
+    // === 1. ЗАПУСК LSP-СЕРВЕРА ===
+    
+    // Путь к скомпилированному серверу
+    const serverModule = context.asAbsolutePath(path.join('out', 'server.js'));
+    
+    // Опции для отладки (будем использовать в разработке)
+    const debugOptions = { execArgv: ['--nolazy', '--inspect=6009'] };
+    
+    // Опции сервера
+    const serverOptions: ServerOptions = {
+        run: { 
+            module: serverModule, 
+            transport: TransportKind.ipc 
+        },
+        debug: {
+            module: serverModule,
+            transport: TransportKind.ipc,
+            options: debugOptions
+        }
+    };
+    
+    // Опции клиента
+    const clientOptions: LanguageClientOptions = {
+        documentSelector: [{ scheme: 'file', language: 'pd' }],
+        synchronize: {
+            fileEvents: vscode.workspace.createFileSystemWatcher('**/*.pd')
+        }
+    };
+    
+    // Создаём и запускаем LSP-клиент
+    client = new LanguageClient(
+        'pandoLanguageServer',
+        'Pando Language Server',
+        serverOptions,
+        clientOptions
+    );
+    
+    // Запускаем клиент
+    client.start();
+    
+    // === 2. СТАТУСНАЯ ПАНЕЛЬ ===
+    
+    // Создаем кнопку на панели статуса
+    const statusBarItem = vscode.window.createStatusBarItem(
+        vscode.StatusBarAlignment.Right,
+        100
+    );
+    statusBarItem.command = 'pando.run';
+    statusBarItem.text = '$(play) Run Pando';
+    statusBarItem.tooltip = 'Запустить текущий Pando файл';
+    
+    // Показываем кнопку только для .pd файлов
+    if (vscode.window.activeTextEditor?.document.languageId === 'pd') {
+        statusBarItem.show();
+    }
+    
+    // Следим за сменой активного редактора
+    vscode.window.onDidChangeActiveTextEditor(editor => {
+        if (editor?.document.languageId === 'pd') {
+            statusBarItem.show();
+        } else {
+            statusBarItem.hide();
+        }
+    });
+    
+    // === 3. РЕГИСТРАЦИЯ КОМАНДЫ "pando.run" (ваш существующий код) ===
+    
     const runCommand = vscode.commands.registerCommand('pando.run', async (fileUri?: vscode.Uri) => {
         try {
             // 1. Определяем файл для компиляции
@@ -33,9 +102,6 @@ export function activate(context: vscode.ExtensionContext) {
                 const extensionPath = context.extensionPath;
                 const transpilerPath = path.join(extensionPath, 'pando_transpiler', 'target', 'release', 'pando_transpiler.exe');
                 
-                // Альтернативно, если транслятор в другом месте:
-                // const transpilerPath = '/path/to/your/transpiler';
-
                 // 4. Вызываем транслятор
                 const pdFile = targetFile.fsPath;
                 const rsFile = pdFile.replace('.pd', '.rs');
@@ -68,7 +134,12 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(runCommand);
+    // === 4. ДОБАВЛЯЕМ ВСЕ ПОДПИСКИ В КОНТЕКСТ ===
+    
+    context.subscriptions.push(
+        runCommand,
+        statusBarItem
+    );
 }
 
 // Функция для запуска транслятора
@@ -169,4 +240,9 @@ async function runExecutable(exePath: string, outputChannel: vscode.OutputChanne
     });
 }
 
-export function deactivate() {}
+export function deactivate() {
+    // Останавливаем LSP-клиент при деактивации
+    if (client) {
+        return client.stop();
+    }
+}

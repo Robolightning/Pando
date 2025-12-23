@@ -1,0 +1,13 @@
+# Объявление переменных
+x: int = 42
+y: float = 3.14
+z: uint64
+name: str = "Pando"
+flag: bool = True
+ch: char = 'A'
+empty: None = None
+
+# Использование с print
+print("x = ")
+print("name = ")  # Пока просто строки
+print("flag = ")
