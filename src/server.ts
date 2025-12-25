@@ -10,9 +10,9 @@ import {
     TextDocumentPositionParams,
     TextDocumentSyncKind,
     InitializeResult,
-    DidChangeConfigurationNotification,
-    DidChangeTextDocumentParams,
-    PublishDiagnosticsParams
+    SemanticTokensParams,
+    SemanticTokens,
+    SemanticTokensBuilder
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
@@ -23,31 +23,38 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 const pandoTypes = [
     'int', 'int8', 'int16', 'int32', 'int64', 'int128', 'int_size',
     'uint8', 'uint16', 'uint32', 'uint64', 'uint128', 'uint_size',
-    'float', 'double', 'bool', 'char', 'str', 'None'
+    'float', 'double', 'bool', 'char', 'str', 'bytes', 'bytearray', 'string', 'None'
 ];
 
 // Карта соответствия типов Pando -> Rust
 const typeMap: { [key: string]: string } = {
-    'int': 'i32',
-    'int8': 'i8',
-    'int16': 'i16',
-    'int32': 'i32',
-    'int64': 'i64',
-    'int128': 'i128',
-    'int_size': 'isize',
-    'uint8': 'u8',
-    'uint16': 'u16',
-    'uint32': 'u32',
-    'uint64': 'u64',
-    'uint128': 'u128',
-    'uint_size': 'usize',
-    'float': 'f32',
-    'double': 'f64',
-    'bool': 'bool',
-    'char': 'char',
-    'str': '&str',
+    'int': 'i32', 'int8': 'i8', 'int16': 'i16', 'int32': 'i32', 'int64': 'i64',
+    'int128': 'i128', 'int_size': 'isize', 'uint8': 'u8', 'uint16': 'u16',
+    'uint32': 'u32', 'uint64': 'u64', 'uint128': 'u128', 'uint_size': 'usize',
+    'float': 'f32', 'double': 'f64', 'bool': 'bool', 'char': 'char',
+    'str': '&str', 'bytes': '&[u8]', 'bytearray': 'Vec<u8>', 'string': 'String',
     'None': '()'
 };
+
+interface VariableInfo {
+    name: string;
+    type: string;
+    line: number;
+    startChar: number;
+    endChar: number;
+}
+
+interface TokenInfo {
+    line: number;
+    startChar: number;
+    length: number;
+    tokenType: number; // 0 = variable, 1 = type, 2 = function, 3 = keyword
+    tokenModifiers: number; // 0 = none, 1 = declaration
+}
+
+const documentVariables = new Map<string, VariableInfo[]>();
+const documentVarMap = new Map<string, Map<string, VariableInfo>>();
+const documentTokens = new Map<string, TokenInfo[]>(); // Новое хранилище для токенов
 
 connection.onInitialize((params: InitializeParams) => {
     const result: InitializeResult = {
@@ -57,114 +64,383 @@ connection.onInitialize((params: InitializeParams) => {
                 resolveProvider: false,
                 triggerCharacters: ['.', ':', '=', '(', '"', "'"]
             },
-            diagnosticProvider: {
-                interFileDependencies: false,
-                workspaceDiagnostics: false
+            semanticTokensProvider: {
+                full: true,
+                range: false,
+                legend: {
+                    tokenTypes: ['variable', 'type', 'function', 'keyword'],
+                    tokenModifiers: ['declaration']
+                }
             }
         }
     };
     return result;
 });
 
-// Функция для валидации документа и поиска неизвестных типов
-function validateTextDocument(textDocument: TextDocument): Diagnostic[] {
+// Функция для определения типа литерала
+function getLiteralType(literal: string): string | null {
+    // Целочисленные литералы
+    if (/^-?\d+$/.test(literal)) return 'int';
+    
+    // Числа с плавающей точкой
+    if (/^-?\d+\.\d+$/.test(literal) || /^-?\d+\.$/.test(literal) || /^-?\.\d+$/.test(literal)) {
+        return 'float';
+    }
+    
+    // Строки в двойных кавычках
+    if ((literal.startsWith('"') && literal.endsWith('"')) || 
+        (literal.startsWith("'") && literal.endsWith("'"))) {
+        return 'str';
+    }
+    
+    // Булевы значения
+    if (literal === 'True' || literal === 'False') return 'bool';
+    
+    // None
+    if (literal === 'None') return 'None';
+    
+    // Символы (одиночный символ в кавычках)
+    if ((literal.startsWith("'") && literal.endsWith("'") && literal.length === 3) ||
+        (literal.startsWith('"') && literal.endsWith('"') && literal.length === 3)) {
+        return 'char';
+    }
+    
+    return null;
+}
+
+// Функция для проверки совместимости типов
+function areTypesCompatible(targetType: string, sourceType: string): boolean {
+    // Если типы одинаковые, всегда совместимы
+    if (targetType === sourceType) return true;
+    
+    // Числовые преобразования (можно добавлять больше правил)
+    const numericConversions: { [key: string]: string[] } = {
+        'int': ['int8', 'int16', 'int32', 'int64', 'int128', 'int_size', 'float', 'double'],
+        'int8': ['int16', 'int32', 'int64', 'int128', 'int_size', 'float', 'double'],
+        'int16': ['int32', 'int64', 'int128', 'int_size', 'float', 'double'],
+        'int32': ['int64', 'int128', 'float', 'double'],
+        'int64': ['int128', 'float', 'double'],
+        'float': ['double'],
+    };
+    
+    return numericConversions[sourceType]?.includes(targetType) || false;
+}
+
+// Функция для парсинга документа
+function parseDocument(textDocument: TextDocument): {
+    variables: VariableInfo[];
+    tokens: TokenInfo[];
+    diagnostics: Diagnostic[];
+} {
     const text = textDocument.getText();
     const lines = text.split('\n');
+    const variables: VariableInfo[] = [];
+    const tokens: TokenInfo[] = [];
     const diagnostics: Diagnostic[] = [];
-
-    // Регулярное выражение для поиска объявлений переменных с типами
-    // Формат: имя: тип [= значение]
-    const typeDeclarationRegex = /([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([a-zA-Z_][a-zA-Z0-9_]*)/g;
-
+    const localVarMap = new Map<string, VariableInfo>();
+    
+    // Сначала собираем все объявления (без проверки значений)
     lines.forEach((line, lineIndex) => {
-        // Пропускаем комментарии
-        if (line.trim().startsWith('#')) {
-            return;
-        }
-
-        // Ищем все объявления типов в строке
-        let match: RegExpExecArray | null;
-        while ((match = typeDeclarationRegex.exec(line)) !== null) {
-            const varName = match[1];
-            const typeName = match[2];
-            const startIndex = match.index + match[0].indexOf(typeName);
+        if (line.trim().startsWith('#')) return;
+        
+        // Обрабатываем объявления с типами: x: тип = значение
+        const declMatch = line.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*=\s*(.+))?/);
+        if (declMatch) {
+            const varName = declMatch[1];
+            const typeName = declMatch[2];
+            const startIndex = line.indexOf(varName);
             
-            // Проверяем, известен ли тип
+            // Добавляем токен для объявления переменной
+            tokens.push({
+                line: lineIndex,
+                startChar: startIndex,
+                length: varName.length,
+                tokenType: 0, // variable
+                tokenModifiers: 1 // declaration
+            });
+            
+            // Добавляем токен для типа
+            const typeStart = line.indexOf(typeName);
+            if (typeStart !== -1) {
+                tokens.push({
+                    line: lineIndex,
+                    startChar: typeStart,
+                    length: typeName.length,
+                    tokenType: 1, // type
+                    tokenModifiers: 0
+                });
+            }
+            
+            // Проверяем тип
             if (!pandoTypes.includes(typeName)) {
-                const diagnostic: Diagnostic = {
+                const typeStart = line.indexOf(typeName);
+                diagnostics.push({
                     severity: DiagnosticSeverity.Error,
                     range: {
-                        start: { line: lineIndex, character: startIndex },
-                        end: { line: lineIndex, character: startIndex + typeName.length }
+                        start: { line: lineIndex, character: typeStart },
+                        end: { line: lineIndex, character: typeStart + typeName.length }
                     },
                     message: `Неизвестный тип "${typeName}"`,
                     source: 'pando',
                     code: 'undefined-type'
+                });
+            } else {
+                const varInfo: VariableInfo = {
+                    name: varName,
+                    type: typeName,
+                    line: lineIndex,
+                    startChar: startIndex,
+                    endChar: startIndex + varName.length
                 };
-                diagnostics.push(diagnostic);
-            }
-        }
-
-        // Дополнительная проверка: если строка содержит двоеточие, но нет известного типа
-        const colonIndex = line.indexOf(':');
-        if (colonIndex !== -1) {
-            const afterColon = line.substring(colonIndex + 1).trim();
-            
-            // Если после двоеточия есть текст, но это не известный тип
-            if (afterColon.length > 0) {
-                const firstWord = afterColon.split(/\s+/)[0];
-                if (!pandoTypes.includes(firstWord) && !firstWord.includes('=') && !firstWord.includes('#')) {
-                    // Проверяем, что это действительно похоже на тип, а не на что-то другое
-                    if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(firstWord)) {
-                        const startIndex = colonIndex + 1 + line.substring(colonIndex + 1).indexOf(firstWord);
-                        const diagnostic: Diagnostic = {
-                            severity: DiagnosticSeverity.Error,
-                            range: {
-                                start: { line: lineIndex, character: startIndex },
-                                end: { line: lineIndex, character: startIndex + firstWord.length }
-                            },
-                            message: `Неизвестный тип "${firstWord}". Допустимые типы: ${pandoTypes.join(', ')}`,
-                            source: 'pando',
-                            code: 'undefined-type'
-                        };
-                        diagnostics.push(diagnostic);
-                    }
+                
+                if (localVarMap.has(varName)) {
+                    const existing = localVarMap.get(varName)!;
+                    diagnostics.push({
+                        severity: DiagnosticSeverity.Warning,
+                        range: {
+                            start: { line: lineIndex, character: startIndex },
+                            end: { line: lineIndex, character: startIndex + varName.length }
+                        },
+                        message: `Переменная "${varName}" уже объявлена ранее (строка ${existing.line + 1})`,
+                        source: 'pando',
+                        code: 'duplicate-variable'
+                    });
+                } else {
+                    variables.push(varInfo);
+                    localVarMap.set(varName, varInfo);
                 }
             }
         }
     });
-
-    return diagnostics;
+    
+    // Затем проверяем присваивания и находим использования переменных
+    lines.forEach((line, lineIndex) => {
+        if (line.trim().startsWith('#')) return;
+        
+        // Находим все идентификаторы в строке
+        const identifierRegex = /([a-zA-Z_][a-zA-Z0-9_]*)/g;
+        let match: RegExpExecArray | null;
+        
+        while ((match = identifierRegex.exec(line)) !== null) {
+            const identifier = match[1];
+            const startChar = match.index;
+            
+            // Пропускаем ключевые слова и типы
+            if (pandoTypes.includes(identifier) || 
+                identifier === 'print' || 
+                identifier === 'True' || 
+                identifier === 'False' || 
+                identifier === 'None') {
+                continue;
+            }
+            
+            // Проверяем, является ли это использованием переменной
+            if (localVarMap.has(identifier)) {
+                // Проверяем, не является ли это объявлением
+                const isDeclaration = variables.some(v => 
+                    v.line === lineIndex && 
+                    v.startChar === startChar
+                );
+                
+                if (!isDeclaration) {
+                    // Добавляем токен для использования переменной
+                    tokens.push({
+                        line: lineIndex,
+                        startChar,
+                        length: identifier.length,
+                        tokenType: 0, // variable
+                        tokenModifiers: 0 // не объявление
+                    });
+                }
+            }
+        }
+        
+        // Проверяем присваивания в объявлениях: x: тип = значение
+        const declWithAssignMatch = line.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)/);
+        if (declWithAssignMatch) {
+            const varName = declWithAssignMatch[1];
+            const typeName = declWithAssignMatch[2];
+            const value = declWithAssignMatch[3].trim();
+            
+            // Пропускаем, если тип неизвестен (уже есть ошибка выше)
+            if (!pandoTypes.includes(typeName)) return;
+            
+            // Проверяем, является ли значение переменной
+            const varMatch = value.match(/^([a-zA-Z_][a-zA-Z0-9_]*)$/);
+            if (varMatch) {
+                const rhsVarName = varMatch[1];
+                const rhsVar = localVarMap.get(rhsVarName);
+                
+                if (!rhsVar) {
+                    const rhsStart = line.indexOf(rhsVarName);
+                    diagnostics.push({
+                        severity: DiagnosticSeverity.Error,
+                        range: {
+                            start: { line: lineIndex, character: rhsStart },
+                            end: { line: lineIndex, character: rhsStart + rhsVarName.length }
+                        },
+                        message: `Переменная "${rhsVarName}" не объявлена`,
+                        source: 'pando',
+                        code: 'undeclared-variable'
+                    });
+                } else if (!areTypesCompatible(typeName, rhsVar.type)) {
+                    const rhsStart = line.indexOf(rhsVarName);
+                    diagnostics.push({
+                        severity: DiagnosticSeverity.Error,
+                        range: {
+                            start: { line: lineIndex, character: rhsStart },
+                            end: { line: lineIndex, character: rhsStart + rhsVarName.length }
+                        },
+                        message: `Несовместимые типы: нельзя присвоить ${rhsVar.type} в ${typeName}`,
+                        source: 'pando',
+                        code: 'type-mismatch'
+                    });
+                }
+            } else {
+                // Это литерал - проверяем его тип
+                const literalType = getLiteralType(value);
+                if (literalType !== null && !areTypesCompatible(typeName, literalType)) {
+                    const valueStart = line.indexOf(value);
+                    diagnostics.push({
+                        severity: DiagnosticSeverity.Error,
+                        range: {
+                            start: { line: lineIndex, character: valueStart },
+                            end: { line: lineIndex, character: valueStart + value.length }
+                        },
+                        message: `Несовместимые типы: нельзя присвоить ${literalType} в ${typeName}`,
+                        source: 'pando',
+                        code: 'type-mismatch'
+                    });
+                }
+            }
+        }
+        
+        // Проверяем простые присваивания: x = y
+        const simpleAssignMatch = line.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
+        if (simpleAssignMatch && !line.includes(':')) {
+            const varName = simpleAssignMatch[1];
+            const rhsVarName = simpleAssignMatch[2];
+            
+            const lhsVar = localVarMap.get(varName);
+            const rhsVar = localVarMap.get(rhsVarName);
+            
+            if (!lhsVar) {
+                const startIndex = line.indexOf(varName);
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Error,
+                    range: {
+                        start: { line: lineIndex, character: startIndex },
+                        end: { line: lineIndex, character: startIndex + varName.length }
+                    },
+                    message: `Переменная "${varName}" не объявлена`,
+                    source: 'pando',
+                    code: 'undeclared-variable'
+                });
+            }
+            
+            if (!rhsVar) {
+                const startIndex = line.indexOf(rhsVarName);
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Error,
+                    range: {
+                        start: { line: lineIndex, character: startIndex },
+                        end: { line: lineIndex, character: startIndex + rhsVarName.length }
+                    },
+                    message: `Переменная "${rhsVarName}" не объявлена`,
+                    source: 'pando',
+                    code: 'undeclared-variable'
+                });
+            }
+            
+            if (lhsVar && rhsVar && !areTypesCompatible(lhsVar.type, rhsVar.type)) {
+                const startIndex = line.indexOf(rhsVarName);
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Error,
+                    range: {
+                        start: { line: lineIndex, character: startIndex },
+                        end: { line: lineIndex, character: startIndex + rhsVarName.length }
+                    },
+                    message: `Несовместимые типы: нельзя присвоить ${rhsVar.type} в ${lhsVar.type}`,
+                    source: 'pando',
+                    code: 'type-mismatch'
+                });
+            }
+        }
+        
+        // Проверяем использования переменных в print
+        const printMatch = line.match(/print\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)/);
+        if (printMatch) {
+            const varName = printMatch[1];
+            if (!localVarMap.has(varName)) {
+                const startIndex = line.indexOf(varName);
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Error,
+                    range: {
+                        start: { line: lineIndex, character: startIndex },
+                        end: { line: lineIndex, character: startIndex + varName.length }
+                    },
+                    message: `Переменная "${varName}" не объявлена`,
+                    source: 'pando',
+                    code: 'undeclared-variable'
+                });
+            }
+        }
+    });
+    
+    return { variables, tokens, diagnostics };
 }
 
-// Обработчик изменения текста документа
+// Обработчик изменения документа
 documents.onDidChangeContent((change) => {
-    // change.document - это TextDocument, который изменился
-    const diagnostics = validateTextDocument(change.document);
+    const { variables, tokens, diagnostics } = parseDocument(change.document);
     
-    // Отправляем диагностику в VS Code
+    documentVariables.set(change.document.uri, variables);
+    documentTokens.set(change.document.uri, tokens); // Сохраняем токены
+    const varMap = new Map<string, VariableInfo>();
+    variables.forEach(v => varMap.set(v.name, v));
+    documentVarMap.set(change.document.uri, varMap);
+    
+    // Отправляем диагностику
     connection.sendDiagnostics({
         uri: change.document.uri,
         diagnostics
     });
+    
+    // Запрашиваем обновление семантических токенов
+    connection.sendNotification('workspace/semanticTokens/refresh');
 });
 
-// Обработчик открытия документа
-documents.onDidOpen((open) => {
-    // open.document - это TextDocument, который открыли
-    const diagnostics = validateTextDocument(open.document);
-    connection.sendDiagnostics({
-        uri: open.document.uri,
-        diagnostics
+// Семантические токены
+connection.onRequest('textDocument/semanticTokens/full', (params: SemanticTokensParams): SemanticTokens => {
+    const builder = new SemanticTokensBuilder();
+    const tokens = documentTokens.get(params.textDocument.uri) || [];
+    
+    // Сортируем токены по строкам и позициям
+    tokens.sort((a, b) => {
+        if (a.line === b.line) {
+            return a.startChar - b.startChar;
+        }
+        return a.line - b.line;
     });
+    
+    // Добавляем токены в билдер
+    tokens.forEach(token => {
+        builder.push(
+            token.line,
+            token.startChar,
+            token.length,
+            token.tokenType,
+            token.tokenModifiers
+        );
+    });
+    
+    return builder.build();
 });
 
 // Автодополнение
 connection.onCompletion((textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
     const document = documents.get(textDocumentPosition.textDocument.uri);
-    if (!document) {
-        return [];
-    }
+    if (!document) return [];
 
     const position = textDocumentPosition.position;
     const lineText = document.getText({
@@ -173,20 +449,13 @@ connection.onCompletion((textDocumentPosition: TextDocumentPositionParams): Comp
     });
 
     const trimmed = lineText.trim();
-    
-    // Пропускаем строки с комментариями
-    if (trimmed.startsWith('#')) {
-        return [];
-    }
+    if (trimmed.startsWith('#')) return [];
 
     const completions: CompletionItem[] = [];
+    const varMap = documentVarMap.get(textDocumentPosition.textDocument.uri);
 
     // Автодополнение для print
-    if (trimmed.length === 0 || 
-        trimmed.endsWith('p') || 
-        trimmed.endsWith('pr') || 
-        trimmed.endsWith('pri') || 
-        trimmed.endsWith('prin')) {
+    if (trimmed.length === 0 || trimmed.match(/\b(print|p|pr|pri|prin)$/)) {
         completions.push({
             label: 'print',
             kind: CompletionItemKind.Function,
@@ -195,64 +464,50 @@ connection.onCompletion((textDocumentPosition: TextDocumentPositionParams): Comp
         });
     }
 
-    // Автодополнение для типов (если есть двоеточие)
+    // Автодополнение для типов
     if (trimmed.includes(':') && !trimmed.includes('=')) {
         const afterColon = trimmed.split(':').pop()?.trim() || '';
-        
-        // Если после двоеточия мало символов, предлагаем типы
         if (afterColon.length < 3) {
             pandoTypes.forEach(typeName => {
                 if (typeName.startsWith(afterColon)) {
                     completions.push({
                         label: typeName,
                         kind: CompletionItemKind.TypeParameter,
-                        detail: `Pando тип → ${typeMap[typeName] || typeName}`,
-                        documentation: `Соответствует Rust типу: ${typeMap[typeName] || typeName}`
+                        detail: `Pando тип → ${typeMap[typeName]}`,
+                        documentation: `Соответствует Rust типу: ${typeMap[typeName]}`
                     });
                 }
             });
         }
     }
 
-    // Автодополнение для значений bool
-    if (trimmed.endsWith('=') || trimmed.includes('bool') && trimmed.includes('=')) {
-        completions.push({
-            label: 'True',
-            kind: CompletionItemKind.Value,
-            detail: 'Логическое значение',
-            documentation: 'Соответствует Rust: true'
-        });
-        completions.push({
-            label: 'False',
-            kind: CompletionItemKind.Value,
-            detail: 'Логическое значение',
-            documentation: 'Соответствует Rust: false'
+    // Автодополнение для переменных
+    if (varMap && (trimmed.endsWith('=') || trimmed.endsWith(' ') || trimmed.length === 0)) {
+        Array.from(varMap.keys()).forEach(varName => {
+            const varInfo = varMap.get(varName)!;
+            completions.push({
+                label: varName,
+                kind: CompletionItemKind.Variable,
+                detail: `Тип: ${varInfo.type}`,
+                documentation: `Объявлена в строке ${varInfo.line + 1}`
+            });
         });
     }
 
-    // Автодополнение для значений None
+    // Автодополнение для bool значений
+    if (trimmed.endsWith('=') || (trimmed.includes('bool') && trimmed.includes('='))) {
+        completions.push({ label: 'True', kind: CompletionItemKind.Value, detail: 'Логическое значение' });
+        completions.push({ label: 'False', kind: CompletionItemKind.Value, detail: 'Логическое значение' });
+    }
+
+    // Автодополнение для None значений
     if (trimmed.includes('None') && trimmed.includes('=')) {
-        completions.push({
-            label: 'None',
-            kind: CompletionItemKind.Value,
-            detail: 'Значение для типа None',
-            documentation: 'Соответствует Rust: ()'
-        });
-        completions.push({
-            label: '()',
-            kind: CompletionItemKind.Value,
-            detail: 'Альтернативное значение для None',
-            documentation: 'Явное указание пустого кортежа'
-        });
+        completions.push({ label: 'None', kind: CompletionItemKind.Value, detail: 'Значение для типа None' });
+        completions.push({ label: '()', kind: CompletionItemKind.Value, detail: 'Альтернативное значение' });
     }
 
     return completions;
 });
-
-// Вспомогательная функция для получения Rust-эквивалента типа
-function getRustType(pandoType: string): string {
-    return typeMap[pandoType] || pandoType;
-}
 
 documents.listen(connection);
 connection.listen();

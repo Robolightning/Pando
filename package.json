@@ -24,6 +24,17 @@
       "scopeName": "source.pando",
       "path": "./syntaxes/pd.tmLanguage.json"
     }],
+    "semanticTokenScopes": [
+      {
+        "language": "pd",
+        "scopes": {
+          "variable": ["variable.other.readwrite.pando"],
+          "type": ["support.type.pando", "storage.type.pando"],
+          "function": ["support.function.builtin.pando"],
+          "keyword": ["keyword.control.pando"]
+        }
+      }
+    ],
     "commands": [{
       "command": "pando.run",
       "title": "Запуск файла Pando",

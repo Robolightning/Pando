@@ -33,6 +33,12 @@ enum ParsedLine {
         comment: Option<String>,
         indent: usize,
     },
+    VariableAssign {
+        name: String,
+        value: String,
+        comment: Option<String>,
+        indent: usize,
+    },
     Comment {
         content: String,
         indent: usize,
@@ -62,6 +68,9 @@ fn get_type_mapping(type_name: &str) -> Option<&'static str> {
         ("char", "char"),
         ("str", "&str"),
         ("None", "()"),
+        ("bytes", "&[u8]"),
+        ("bytearray", "Vec<u8>"),
+        ("string", "String"),
     ]
     .iter()
     .cloned()
@@ -81,6 +90,9 @@ fn get_default_value(type_name: &str) -> String {
         "char" => "'\\0'".to_string(),
         "str" => "\"\"".to_string(),
         "None" => "()".to_string(),
+        "bytes" => "b\"\"".to_string(),
+        "bytearray" => "Vec::new()".to_string(),
+        "string" => "String::new()".to_string(),
         _ => "0".to_string(),
     }
 }
@@ -154,13 +166,66 @@ fn split_code_and_comment(line: &str) -> (String, Option<String>) {
 }
 
 // Парсинг значения в зависимости от типа
-fn parse_value(value_str: &str, type_name: &str) -> Result<String, TranspilerError> {
+fn parse_value(value_str: &str, type_name: &str, variables: &HashMap<String, String>) -> Result<String, TranspilerError> {
     let trimmed = value_str.trim();
     
+    // Проверяем, является ли значение идентификатором переменной
+    if variables.contains_key(trimmed) {
+        // Это переменная - просто возвращаем её имя
+        return Ok(trimmed.to_string());
+    }
+    
+    // Проверяем, является ли значение булевым
+    match trimmed {
+        "True" if type_name == "bool" => return Ok("true".to_string()),
+        "False" if type_name == "bool" => return Ok("false".to_string()),
+        _ => {}
+    }
+    
+    // Проверяем, является ли значение None
+    if trimmed == "None" && type_name == "None" {
+        return Ok("()".to_string());
+    }
+    
+    // Проверяем, является ли значение char
+    if type_name == "char" && trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 3 {
+        let inner = &trimmed[1..trimmed.len()-1];
+        let escaped = escape_string_for_rust(inner);
+        return Ok(format!("'{}'", escaped));
+    }
+    
+    // Проверяем, является ли значение str
+    if type_name == "str" && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        let inner = &trimmed[1..trimmed.len()-1];
+        let escaped = escape_string_for_rust(inner);
+        return Ok(format!("\"{}\"", escaped));
+    }
+    
+    // Проверяем, является ли значение string
+    if type_name == "string" && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        let inner = &trimmed[1..trimmed.len()-1];
+        let escaped = escape_string_for_rust(inner);
+        return Ok(format!("String::from(\"{}\")", escaped));
+    }
+    
+    // Проверяем, является ли значение bytes
+    if type_name == "bytes" && trimmed.starts_with("b\"") && trimmed.ends_with('"') {
+        let inner = &trimmed[2..trimmed.len()-1];
+        let escaped = escape_string_for_rust(inner);
+        return Ok(format!("b\"{}\"", escaped));
+    }
+    
+    // Проверяем, является ли значение bytearray
+    if type_name == "bytearray" && trimmed.starts_with("b\"") && trimmed.ends_with('"') {
+        let inner = &trimmed[2..trimmed.len()-1];
+        let escaped = escape_string_for_rust(inner);
+        return Ok(format!("b\"{}\".to_vec()", escaped));
+    }
+    
+    // Проверяем числовые типы
     match type_name {
         "int" | "int8" | "int16" | "int32" | "int64" | "int128" | "int_size" |
         "uint8" | "uint16" | "uint32" | "uint64" | "uint128" | "uint_size" => {
-            // Проверяем, что это число
             if trimmed.parse::<i64>().is_ok() {
                 Ok(trimmed.to_string())
             } else {
@@ -171,7 +236,6 @@ fn parse_value(value_str: &str, type_name: &str) -> Result<String, TranspilerErr
             }
         }
         "float" | "double" => {
-            // Проверяем, что это число с плавающей точкой
             if trimmed.parse::<f64>().is_ok() {
                 if type_name == "float" {
                     Ok(format!("{}f32", trimmed))
@@ -185,59 +249,23 @@ fn parse_value(value_str: &str, type_name: &str) -> Result<String, TranspilerErr
                 ))
             }
         }
-        "bool" => {
-            match trimmed {
-                "True" => Ok("true".to_string()),
-                "False" => Ok("false".to_string()),
-                _ => Err(TranspilerError::new(
-                    "Булево значение должно быть True или False",
-                    1, 1
-                ))
-            }
-        }
-        "char" => {
-            if trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 3 {
-                let inner = &trimmed[1..trimmed.len()-1];
-                let escaped = escape_string_for_rust(inner);
-                Ok(format!("'{}'", escaped))
-            } else {
+        _ => {
+            // Если дошли сюда и тип неизвестен, или значение не подходит
+            if !get_type_mapping(type_name).is_some() {
                 Err(TranspilerError::new(
-                    "Значение char должно быть в одинарных кавычках",
+                    &format!("Неизвестный тип: {}", type_name),
                     1, 1
                 ))
-            }
-        }
-        "str" => {
-            if trimmed.starts_with('"') && trimmed.ends_with('"') {
-                let inner = &trimmed[1..trimmed.len()-1];
-                let escaped = escape_string_for_rust(inner);
-                Ok(format!("\"{}\"", escaped))
             } else {
-                Err(TranspilerError::new(
-                    "Строковое значение должно быть в двойных кавычках",
-                    1, 1
-                ))
+                // Для остальных типов просто возвращаем как есть
+                Ok(trimmed.to_string())
             }
         }
-        "None" => {
-            match trimmed {
-                "()" => Ok("()".to_string()),
-                "None" => Ok("()".to_string()),  // Добавляем поддержку None
-                _ => Err(TranspilerError::new(
-                    "Для типа None допустимо только значение None или ()",
-                    1, 1
-                ))
-            }
-        }
-        _ => Err(TranspilerError::new(
-            &format!("Неизвестный тип: {}", type_name),
-            1, 1
-        ))
     }
 }
 
 // Функция для парсинга одной строки
-fn parse_line(line: &str, line_num: usize) -> Result<ParsedLine, TranspilerError> {
+fn parse_line(line: &str, line_num: usize, variables: &mut HashMap<String, String>) -> Result<ParsedLine, TranspilerError> {
     let indent = line.chars().take_while(|c| c.is_whitespace()).count();
     let (code_part, comment_part) = split_code_and_comment(line);
     
@@ -336,9 +364,12 @@ fn parse_line(line: &str, line_num: usize) -> Result<ParsedLine, TranspilerError
             ));
         }
         
+        // Добавляем переменную в таблицу символов
+        variables.insert(var_name.clone(), type_part.to_string());
+        
         let value = if parts.len() > 1 {
             let value_str = parts[1].trim();
-            Some(parse_value(value_str, type_part)?)
+            Some(parse_value(value_str, type_part, variables)?)
         } else {
             None
         };
@@ -350,6 +381,37 @@ fn parse_line(line: &str, line_num: usize) -> Result<ParsedLine, TranspilerError
             comment: comment_trimmed,
             indent,
         });
+    }
+
+    // Пытаемся распарсить как присваивание без типа: x = значение
+    if let Some(equals_pos) = trimmed_code.find('=') {
+        let left_side = trimmed_code[..equals_pos].trim();
+        let right_side = trimmed_code[equals_pos + 1..].trim();
+        
+        // Проверяем, что слева от = допустимое имя переменной
+        if !left_side.is_empty() && left_side.chars().next().unwrap().is_alphabetic() {
+            // Проверяем, объявлена ли переменная
+            if !variables.contains_key(left_side) {
+                return Err(TranspilerError::new(
+                    &format!("Переменная '{}' не объявлена", left_side),
+                    line_num,
+                    1,
+                ));
+            }
+            
+            // Получаем тип переменной
+            let var_type = variables.get(left_side).unwrap();
+            
+            // Парсим значение
+            let parsed_value = parse_value(right_side, var_type, variables)?;
+            
+            return Ok(ParsedLine::VariableAssign {
+                name: left_side.to_string(),
+                value: parsed_value,
+                comment: comment_trimmed,
+                indent,
+            });
+        }
     }
     
     Err(TranspilerError::new(
@@ -392,6 +454,18 @@ fn generate_rust_line(parsed: &ParsedLine) -> String {
             }
             line
         }
+        ParsedLine::VariableAssign { name, value, comment, indent } => {
+            let indent_str = " ".repeat(*indent);
+            let mut line = format!("{}{} = {};", indent_str, name, value);
+            if let Some(comment_text) = comment {
+                if comment_text.is_empty() {
+                    line.push_str(" //");
+                } else {
+                    line.push_str(&format!(" // {}", comment_text));
+                }
+            }
+            line
+        }
         ParsedLine::Comment { content, indent } => {
             let indent_str = " ".repeat(*indent);
             format!("{}{}", indent_str, content)
@@ -407,11 +481,12 @@ fn transpile_pd_to_rs(input_path: &str, output_path: &str) -> Result<(), Transpi
 
     let lines: Vec<&str> = content.lines().collect();
     let mut rust_lines = Vec::new();
+    let mut variables = HashMap::new();
     
     for (i, line) in lines.iter().enumerate() {
         let line_num = i + 1;
         
-        match parse_line(line, line_num) {
+        match parse_line(line, line_num, &mut variables) {
             Ok(parsed) => rust_lines.push(parsed),
             Err(e) => return Err(e),
         }

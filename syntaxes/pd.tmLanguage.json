@@ -6,6 +6,9 @@
       "include": "#comments"
     },
     {
+      "include": "#byte_strings"
+    },
+    {
       "include": "#strings"
     },
     {
@@ -25,9 +28,6 @@
     },
     {
       "include": "#constants"
-    },
-    {
-      "include": "#identifiers"
     }
   ],
   "repository": {
@@ -39,6 +39,30 @@
         {
           "name": "punctuation.definition.comment.pando",
           "match": "#"
+        }
+      ]
+    },
+    "byte_strings": {
+      "begin": "(b)(\")",
+      "end": "\"",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.pando"
+        },
+        "2": {
+          "name": "string.quoted.double.binary.pando"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "string.quoted.double.binary.pando"
+        }
+      },
+      "contentName": "string.quoted.double.binary.pando",
+      "patterns": [
+        {
+          "name": "constant.character.escape.pando",
+          "match": "\\\\."
         }
       ]
     },
@@ -100,15 +124,14 @@
       "patterns": [
         {
           "name": "support.type.pando",
-          "match": "\\b(int(8|16|32|64|128|_size)?|uint(8|16|32|64|128|_size)|float|double|bool|char|str)\\b"
+          "match": "\\b(int(8|16|32|64|128|_size)?|uint(8|16|32|64|128|_size)|float|double|bool|char|str|string|bytes|bytearray)\\b"
         },
         {
           "name": "storage.type.pando",
           "match": "\\bNone\\b"
         },
         {
-          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
-          "name": ""
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
         }
       ]
     },
@@ -128,13 +151,13 @@
           "include": "#strings"
         },
         {
+          "include": "#byte_strings"
+        },
+        {
           "include": "#char_literals"
         },
         {
           "include": "#constants"
-        },
-        {
-          "include": "#identifiers"
         }
       ]
     },
@@ -157,6 +180,9 @@
       "patterns": [
         {
           "include": "#strings"
+        },
+        {
+          "include": "#byte_strings"
         }
       ]
     },
@@ -175,10 +201,6 @@
     "constants": {
       "name": "constant.language.pando",
       "match": "\\b(True|False|None)\\b"
-    },
-    "identifiers": {
-      "name": "variable.other.readwrite.pando",
-      "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
     }
   },
   "scopeName": "source.pando"
