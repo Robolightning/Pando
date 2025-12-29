@@ -1,4 +1,6 @@
-a: int = 1
-b: int = a
+s: bytes = b"Hello"
+a: int = 10
+b: int = 20  # Comment
+b = a + b
 
 print("Hello world!")

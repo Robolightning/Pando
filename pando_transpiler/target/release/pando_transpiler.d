@@ -1,1 +1,1 @@
-C:\StableKite\Pando\pando_transpiler\target\release\pando_transpiler.exe: C:\StableKite\Pando\pando_transpiler\src\main.rs
+C:\StableKite\Pando\pando_transpiler\target\release\pando_transpiler.exe: C:\StableKite\Pando\pando_transpiler\src\error.rs C:\StableKite\Pando\pando_transpiler\src\expressions.rs C:\StableKite\Pando\pando_transpiler\src\generator.rs C:\StableKite\Pando\pando_transpiler\src\main.rs C:\StableKite\Pando\pando_transpiler\src\parser.rs C:\StableKite\Pando\pando_transpiler\src\types.rs
